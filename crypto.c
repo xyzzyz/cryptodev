@@ -3,6 +3,7 @@
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/cdev.h>
+#include <linux/fs.h>
 
 #include "crypto.h"
 
@@ -11,19 +12,71 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 static struct class *crypto_class;
 
+static struct cryptodev_t cryptodev;
+
+static struct file_operations cryptodev_fops;
+
+static bool crypto_api_available(void)
+{
+	// TODO: implement.
+	return true;
+}
+
 static int crypto_init(void)
 {
+	int err;
+
 	printk(KERN_NOTICE "Hello, crypto!\n");
+
+	if(!crypto_api_available()) {
+		printk(KERN_WARNING "Crypto API unavailable\n");
+		return -1;
+	}
 
 	crypto_class = class_create(THIS_MODULE, "crypto");
 	if(IS_ERR(crypto_class)) {
-		return PTR_ERR(crypto_class);
+		err = PTR_ERR(crypto_class);
+		goto fail;
 	}
+
+	if((err = alloc_chrdev_region(&cryptodev.dev, cryptodev_minor,
+				      1, "cryptiface"))) {
+		printk(KERN_WARNING "Couldn't alloc chrdev region\n");
+		goto alloc_chrdev_fail;
+	}
+
+	cdev_init(&cryptodev.cdev, &cryptodev_fops);
+	cryptodev.cdev.owner = THIS_MODULE;
+	cryptodev.cdev.ops = &cryptodev_fops;
+	if((err = cdev_add(&cryptodev.cdev, cryptodev.dev, 1))) {
+		printk(KERN_WARNING "Couldn't add the character device\n");
+		goto cdev_add_fail;
+	}
+
+	cryptodev.device = device_create(crypto_class, 0, cryptodev.dev, 0,
+					 "cryptiface");
+	if(IS_ERR(cryptodev.device)) {
+		printk(KERN_WARNING "Error creating device.\n");
+		err = PTR_ERR(cryptodev.device);
+		goto device_create_fail;
+	}
+
 	return 0;
+device_create_fail:
+	cdev_del(&cryptodev.cdev);
+cdev_add_fail:
+	unregister_chrdev_region(cryptodev.dev, 1);
+alloc_chrdev_fail:
+	class_destroy(crypto_class);
+fail:
+	return err;
 }
 
 static void crypto_exit(void)
 {
+	device_destroy(crypto_class, cryptodev.dev);
+	cdev_del(&cryptodev.cdev);
+	unregister_chrdev_region(cryptodev.dev, 1);
 	class_destroy(crypto_class);
 	printk(KERN_NOTICE "Goodbye, crypto!\n");
 }
