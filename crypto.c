@@ -4,6 +4,7 @@
 #include <linux/device.h>
 #include <linux/cdev.h>
 #include <linux/fs.h>
+#include <linux/proc_fs.h>
 
 #include "crypto.h"
 
@@ -25,7 +26,7 @@ static bool crypto_api_available(void)
 static int create_cryptoiface(void)
 {
 	int err;
-	
+
 	if((err = alloc_chrdev_region(&cryptodev.dev, cryptodev_minor,
 				      1, "cryptiface"))) {
 		printk(KERN_WARNING "Couldn't alloc chrdev region\n");
@@ -49,6 +50,7 @@ static int create_cryptoiface(void)
 	}
 
 	return 0;
+
 device_create_fail:
 	cdev_del(&cryptodev.cdev);
 cdev_add_fail:
@@ -63,6 +65,59 @@ static void destroy_cryptoiface(void)
 	device_destroy(crypto_class, cryptodev.dev);
 	cdev_del(&cryptodev.cdev);
 	unregister_chrdev_region(cryptodev.dev, 1);
+}
+
+static struct proc_dir_entry *proc_cryptiface_directory = NULL;
+static struct proc_dir_entry *proc_cryptiface_overview = NULL;
+// TODO: refactor to support multiple algorithms.
+static struct proc_dir_entry *proc_cryptiface_des = NULL;
+
+static int create_crypto_proc_entries(void)
+{
+	int err;
+	proc_cryptiface_directory = proc_mkdir("cryptiface", NULL);
+	if(NULL == proc_cryptiface_directory) {
+		printk(KERN_WARNING "Couldn't create proc directory.\n");
+		err = -EIO;
+		goto fail;
+	}
+
+	proc_cryptiface_overview = create_proc_entry("overview", 0644,
+						     proc_cryptiface_directory);
+	if(NULL == proc_cryptiface_overview) {
+		printk(KERN_WARNING "Couldn't create proc 'overview' file.\n");
+		err = -EIO;
+		goto overview_fail;
+	}
+
+	proc_cryptiface_des = create_proc_entry("des", 0644,
+						proc_cryptiface_directory);
+	if(NULL == proc_cryptiface_des) {
+		printk(KERN_WARNING "Couldn't create proc 'des' file.\n");
+		err = -EIO;
+		goto des_fail;
+	}
+
+	return 0;
+
+des_fail:
+	remove_proc_entry("overview", proc_cryptiface_directory);
+	proc_cryptiface_overview = NULL;
+overview_fail:
+	remove_proc_entry("cryptiface", NULL);
+	proc_cryptiface_directory = NULL;
+fail:
+	return err;
+}
+
+static void remove_crypto_proc_entries(void)
+{
+	remove_proc_entry("des", proc_cryptiface_directory);
+	proc_cryptiface_des = NULL;
+	remove_proc_entry("overview", proc_cryptiface_directory);
+	proc_cryptiface_overview = NULL;
+	remove_proc_entry("cryptiface", NULL);
+	proc_cryptiface_directory = NULL;
 }
 
 static int crypto_init(void)
@@ -87,8 +142,15 @@ static int crypto_init(void)
 		goto create_cryptoiface_fail;
 	}
 
+	if((err = create_crypto_proc_entries())) {
+		printk(KERN_WARNING "Couldn't create proc entries.\n");
+		goto create_proc_entries_fail;
+	}
+
 	return 0;
 
+create_proc_entries_fail:
+	destroy_cryptoiface();
 create_cryptoiface_fail:
 	class_destroy(crypto_class);
 fail:
@@ -97,6 +159,7 @@ fail:
 
 static void crypto_exit(void)
 {
+	remove_crypto_proc_entries();
 	destroy_cryptoiface();
 	class_destroy(crypto_class);
 	printk(KERN_NOTICE "Goodbye, crypto!\n");
