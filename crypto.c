@@ -22,23 +22,10 @@ static bool crypto_api_available(void)
 	return true;
 }
 
-static int crypto_init(void)
+static int create_cryptoiface(void)
 {
 	int err;
-
-	printk(KERN_NOTICE "Hello, crypto!\n");
-
-	if(!crypto_api_available()) {
-		printk(KERN_WARNING "Crypto API unavailable\n");
-		return -1;
-	}
-
-	crypto_class = class_create(THIS_MODULE, "crypto");
-	if(IS_ERR(crypto_class)) {
-		err = PTR_ERR(crypto_class);
-		goto fail;
-	}
-
+	
 	if((err = alloc_chrdev_region(&cryptodev.dev, cryptodev_minor,
 				      1, "cryptiface"))) {
 		printk(KERN_WARNING "Couldn't alloc chrdev region\n");
@@ -56,7 +43,7 @@ static int crypto_init(void)
 	cryptodev.device = device_create(crypto_class, 0, cryptodev.dev, 0,
 					 "cryptiface");
 	if(IS_ERR(cryptodev.device)) {
-		printk(KERN_WARNING "Error creating device.\n");
+		printk(KERN_WARNING "Error in device_create.\n");
 		err = PTR_ERR(cryptodev.device);
 		goto device_create_fail;
 	}
@@ -67,6 +54,42 @@ device_create_fail:
 cdev_add_fail:
 	unregister_chrdev_region(cryptodev.dev, 1);
 alloc_chrdev_fail:
+	return err;
+
+}
+
+static void destroy_cryptoiface(void)
+{
+	device_destroy(crypto_class, cryptodev.dev);
+	cdev_del(&cryptodev.cdev);
+	unregister_chrdev_region(cryptodev.dev, 1);
+}
+
+static int crypto_init(void)
+{
+	int err;
+
+	printk(KERN_NOTICE "Hello, crypto!\n");
+
+	if(!crypto_api_available()) {
+		printk(KERN_WARNING "Crypto API unavailable\n");
+		return -1; // TODO: errno
+	}
+
+	crypto_class = class_create(THIS_MODULE, "crypto");
+	if(IS_ERR(crypto_class)) {
+		err = PTR_ERR(crypto_class);
+		goto fail;
+	}
+
+	if((err = create_cryptoiface())) {
+		printk(KERN_WARNING "Couldn't create cryptoiface device.\n");
+		goto create_cryptoiface_fail;
+	}
+
+	return 0;
+
+create_cryptoiface_fail:
 	class_destroy(crypto_class);
 fail:
 	return err;
@@ -74,9 +97,7 @@ fail:
 
 static void crypto_exit(void)
 {
-	device_destroy(crypto_class, cryptodev.dev);
-	cdev_del(&cryptodev.cdev);
-	unregister_chrdev_region(cryptodev.dev, 1);
+	destroy_cryptoiface();
 	class_destroy(crypto_class);
 	printk(KERN_NOTICE "Goodbye, crypto!\n");
 }
