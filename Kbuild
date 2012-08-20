@@ -1,2 +1,2 @@
 obj-m := crypto.o
-module-objs := crypto.o
+crypto-y := crypto_module.o crypto_algorithm.o
