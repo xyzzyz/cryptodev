@@ -9,7 +9,7 @@
 
 static void initialize_crypto_db(struct crypto_db *db, uid_t uid)
 {
-	INIT_LIST_HEAD(&db->db_list);
+	INIT_LIST_HEAD(&db->new_contexts_queue);
 	db->uid = uid;
 	memset(db->contexts, 0,
 	       CRYPTO_MAX_CONTEXT_COUNT*sizeof(struct crypto_context));
@@ -41,7 +41,7 @@ struct crypto_db* get_or_create_crypto_db(struct list_head *dbs, uid_t uid)
 	if(NULL == db_entry) {
 		return NULL;
 	}
-	list_add(dbs, &db_entry->db_list);
+	list_add(&db_entry->db_list, dbs);
 	return db_entry;
 }
 
@@ -81,9 +81,11 @@ static void hex_string_to_bytes(char *hex, int hex_len,
 }
 
 
-void add_key_to_db(struct crypto_db *db, int ix,
+int add_key_to_db(struct crypto_db *db, int ix,
 			 char *buf, int len)
 {
+	struct new_context_info *info;
+
 	printk(KERN_INFO "adding key to db, ix %d, len %d", ix, len);
 	memset(db->contexts[ix].key, 0, len/2);
 	hex_string_to_bytes(buf, len, db->contexts[ix].key);
@@ -91,12 +93,23 @@ void add_key_to_db(struct crypto_db *db, int ix,
 	db->contexts[ix].added_time = get_seconds();
 	db->contexts[ix].encoded_count = 0;
 	db->contexts[ix].decoded_count = 0;
+
+	info = kmalloc(sizeof(struct new_context_info), GFP_KERNEL);
+	if(NULL == info) {
+		return -ENOMEM;
+	}
+	info->ix = ix;
+	list_add_tail(&info->contexts, &db->new_contexts_queue);
+	if(list_empty(&db->new_contexts_queue)) {
+		printk(KERN_DEBUG "WTF\n");
+	}
 	db->contexts[ix].is_active = true;
+	return 0;
 }
 
 int delete_key_from_db(struct crypto_db* db, int ix) {
-	// TODO: implement
-	return -EFAULT;
+	db->contexts[ix].is_active = false;
+	return 0;
 }
 
 int acquire_free_context_index(struct crypto_db* db) {

@@ -92,9 +92,8 @@ static void* proc_overview_seq_start(struct seq_file *s, loff_t *pos)
 	}
 
 	uid  = current_euid();
-	// TODO: spinlock
-	db = get_or_create_crypto_db(&cryptodev.crypto_dbs,
-						       uid);
+	// TODO: lock
+	db = get_or_create_crypto_db(&cryptodev.crypto_dbs, uid);
 	if(NULL == db) {
 		return NULL;
 	}
@@ -159,9 +158,46 @@ static struct file_operations proc_overview_file_ops = {
 	.release = seq_release
 };
 
+static int proc_des_read(char *buffer, char **start, off_t offset, int count,
+			 int *eof, void *data)
+{
+	uid_t uid  = current_euid();
+	struct crypto_db *db;
+
+	if(offset > 0) {
+		*eof = 1;
+		return 0;
+	}
+
+	if(count <= 10) {
+		// We do not support small reads
+		return -EINVAL;
+	}
+
+	// TODO: lock
+	db = get_or_create_crypto_db(&cryptodev.crypto_dbs, uid);
+	if(NULL == db) {
+		return -ENOMEM;
+	}
+	// TODO: block if nothing to read.
+	if(!list_empty(&db->new_contexts_queue)) {
+		struct new_context_info *info =
+			list_first_entry(&db->new_contexts_queue,
+					 struct new_context_info,
+					 contexts);
+		int written = sprintf(buffer, "%d", info->ix);
+		list_del(&info->contexts);
+		kfree(info);
+		return min(written, count);
+	} else {
+		printk(KERN_DEBUG "no new context info, should sleep\n");
+	}
+	return -EIO;
+}
 
 static int proc_des_write(struct file *file, const char __user *buffer,
-			  unsigned long count, void *data) {
+			  unsigned long count, void *data)
+{
 	if(count < 2) {
 		printk(KERN_WARNING "Call to write() with too little bytes");
 		return -EINVAL;
@@ -190,16 +226,21 @@ static int proc_des_write(struct file *file, const char __user *buffer,
 		switch(tmp_buffer[0]) {
 		case 'A':
 			if(!is_valid_key(tmp_buffer+1, count-1)) {
+				printk(KERN_WARNING "invalid key\n");
 				return -EINVAL;
 			}
 			ix = acquire_free_context_index(db);
-			add_key_to_db(db, ix, tmp_buffer+1, count-1);
+			err = add_key_to_db(db, ix, tmp_buffer+1, count-1);
 			release_context_index(db, ix);
+			if(err) {
+				return err;
+			}
 			break;
 		case 'D':
 			// tmp_buffer is null terminated, so we don't pass len
 			ix = get_key_index(tmp_buffer+1);
 			if(ix < 0) {
+				printk(KERN_WARNING "invalid index\n");
 				return -EINVAL;
 			}
 			acquire_context_index(db, ix);
@@ -210,6 +251,7 @@ static int proc_des_write(struct file *file, const char __user *buffer,
 			}
 			break;
 		default:
+			printk(KERN_WARNING "unknown operation\n");
 			return -EINVAL;
 			break;
 		}
@@ -248,6 +290,7 @@ static int create_crypto_proc_entries(void)
 		err = -EIO;
 		goto des_fail;
 	}
+	proc_cryptiface_des->read_proc = proc_des_read;
 	proc_cryptiface_des->write_proc = proc_des_write;
 
 	return 0;

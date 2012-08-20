@@ -8,6 +8,7 @@
 enum { CRYPTO_MAX_CONTEXT_COUNT = 128 };
 enum { CRYPTO_MAX_KEY_LENGTH = 128 };
 
+
 struct crypto_context {
 	bool is_active;
 	char key[CRYPTO_MAX_KEY_LENGTH];
@@ -17,10 +18,17 @@ struct crypto_context {
 	unsigned long decoded_count;
 };
 
+struct new_context_info {
+	int ix;
+	struct list_head contexts;
+};
+
 struct crypto_db {
 	uid_t uid;
 	struct crypto_context contexts[CRYPTO_MAX_CONTEXT_COUNT];
 	struct list_head db_list;
+
+	struct list_head new_contexts_queue;
 };
 
 struct crypto_db* create_crypto_db(uid_t uid);
@@ -28,7 +36,7 @@ struct crypto_db* get_or_create_crypto_db(struct list_head *dbs, uid_t uid);
 
 int get_key_index(char *buf);
 bool is_valid_key(char *buf, int len);
-void add_key_to_db(struct crypto_db *db, int ix,
+int add_key_to_db(struct crypto_db *db, int ix,
 		   char *buf, int len);
 int delete_key_from_db(struct crypto_db *db, int ix);
 
