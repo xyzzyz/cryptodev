@@ -161,8 +161,10 @@ static struct file_operations proc_overview_file_ops = {
 static int proc_des_read(char *buffer, char **start, off_t offset, int count,
 			 int *eof, void *data)
 {
+	int result, written;
 	uid_t uid  = current_euid();
 	struct crypto_db *db;
+	struct new_context_info *info;
 
 	if(offset > 0) {
 		*eof = 1;
@@ -177,22 +179,33 @@ static int proc_des_read(char *buffer, char **start, off_t offset, int count,
 	// TODO: lock
 	db = get_or_create_crypto_db(&cryptodev.crypto_dbs, uid);
 	if(NULL == db) {
-		return -ENOMEM;
+		result = -ENOMEM;
+		goto out;
 	}
-	// TODO: block if nothing to read.
-	if(!list_empty(&db->new_contexts_queue)) {
-		struct new_context_info *info =
-			list_first_entry(&db->new_contexts_queue,
-					 struct new_context_info,
-					 contexts);
-		int written = sprintf(buffer, "%d", info->ix);
-		list_del(&info->contexts);
-		kfree(info);
-		return min(written, count);
-	} else {
-		printk(KERN_DEBUG "no new context info, should sleep\n");
+
+	if(mutex_lock_interruptible(&db->new_context_wait_mutex)) {
+		result = -ERESTARTSYS;
+		goto out;
 	}
-	return -EIO;
+	if(wait_event_interruptible(db->new_context_created_waitqueue,
+				    !list_empty(&db->new_contexts_queue))) {
+		result = -ERESTARTSYS;
+		goto mutex_unlock;
+	}
+	spin_lock(&db->new_contexts_list_lock);
+	info = list_first_entry(&db->new_contexts_queue,
+				struct new_context_info,
+				contexts);
+	list_del(&info->contexts);
+	spin_unlock(&db->new_contexts_list_lock);
+	written = sprintf(buffer, "%d", info->ix);
+	kfree(info);
+	result = min(written, count);
+
+mutex_unlock:
+	mutex_unlock(&db->new_context_wait_mutex);
+out:
+	return result;
 }
 
 static int proc_des_write(struct file *file, const char __user *buffer,
@@ -283,7 +296,7 @@ static int create_crypto_proc_entries(void)
 	}
 	proc_cryptiface_overview->proc_fops = &proc_overview_file_ops;
 
-	proc_cryptiface_des = create_proc_entry("des", 0644,
+	proc_cryptiface_des = create_proc_entry("des", 0666,
 						proc_cryptiface_directory);
 	if(NULL == proc_cryptiface_des) {
 		printk(KERN_WARNING "Couldn't create proc 'des' file.\n");

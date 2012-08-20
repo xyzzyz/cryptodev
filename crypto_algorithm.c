@@ -4,12 +4,17 @@
 #include <linux/slab.h>
 #include <linux/ctype.h>
 #include <linux/time.h>
+#include <linux/wait.h>
+#include <linux/sched.h>
 
 #include "crypto_algorithm.h"
 
 static void initialize_crypto_db(struct crypto_db *db, uid_t uid)
 {
 	INIT_LIST_HEAD(&db->new_contexts_queue);
+	init_waitqueue_head(&db->new_context_created_waitqueue);
+	spin_lock_init(&db->new_contexts_list_lock);
+	mutex_init(&db->new_context_wait_mutex);
 	db->uid = uid;
 	memset(db->contexts, 0,
 	       CRYPTO_MAX_CONTEXT_COUNT*sizeof(struct crypto_context));
@@ -99,10 +104,10 @@ int add_key_to_db(struct crypto_db *db, int ix,
 		return -ENOMEM;
 	}
 	info->ix = ix;
+	spin_lock(&db->new_contexts_list_lock);
 	list_add_tail(&info->contexts, &db->new_contexts_queue);
-	if(list_empty(&db->new_contexts_queue)) {
-		printk(KERN_DEBUG "WTF\n");
-	}
+	spin_unlock(&db->new_contexts_list_lock);
+	wake_up_interruptible(&db->new_context_created_waitqueue);
 	db->contexts[ix].is_active = true;
 	return 0;
 }

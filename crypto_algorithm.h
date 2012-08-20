@@ -3,6 +3,8 @@
 #define CRYPTO_ALGORITHM_H
 
 #include <linux/cred.h>
+#include <linux/wait.h>
+
 #include <stddef.h>
 
 enum { CRYPTO_MAX_CONTEXT_COUNT = 128 };
@@ -28,6 +30,9 @@ struct crypto_db {
 	struct crypto_context contexts[CRYPTO_MAX_CONTEXT_COUNT];
 	struct list_head db_list;
 
+	struct mutex new_context_wait_mutex;
+	wait_queue_head_t new_context_created_waitqueue;
+	spinlock_t new_contexts_list_lock;
 	struct list_head new_contexts_queue;
 };
 
