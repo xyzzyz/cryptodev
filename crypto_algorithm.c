@@ -21,7 +21,7 @@ static void initialize_crypto_db(struct crypto_db *db, uid_t uid)
 
 struct crypto_db* create_crypto_db(uid_t uid)
 {
-	struct crypto_db *db = kmalloc(sizeof(struct crypto_db), GFP_KERNEL);
+	struct crypto_db *db = kmalloc(sizeof(*db), GFP_KERNEL);
 	if(NULL == db) {
 		return NULL;
 	}
@@ -98,7 +98,7 @@ int add_key_to_db(struct crypto_db *db, int ix,
 	db->contexts[ix].encoded_count = 0;
 	db->contexts[ix].decoded_count = 0;
 
-	info = kmalloc(sizeof(struct new_context_info), GFP_KERNEL);
+	info = kmalloc(sizeof(*info), GFP_KERNEL);
 	if(NULL == info) {
 		return -ENOMEM;
 	}

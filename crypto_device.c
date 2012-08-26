@@ -5,8 +5,10 @@
 #include <linux/fs.h>
 #include <linux/ioctl.h>
 #include <linux/slab.h>
+#include <asm/uaccess.h>
 
 #include "crypto_structures.h"
+#include "crypto_ioctlmagic.h"
 #include "crypto_device.h"
 
 struct cryptodev_t cryptodev;
@@ -19,11 +21,30 @@ static const unsigned int cryptodev_minor = 0;
 
 static struct class *crypto_class;
 
+struct cryptiface_status {
+	bool ready;
+	int context_id;
+	bool encrypt;
+};
 
 static int cryptiface_open(struct inode *inode, struct file *file)
 {
-	return -EIO;
+	struct cryptiface_status *status = kmalloc(sizeof(*status), GFP_KERNEL);
+	if(NULL == status) {
+		return -ENOMEM;
+	}
+
+	status->ready = false;
+	file->private_data = status;
+	return 0;
 }
+
+static int cryptiface_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+
 
 static ssize_t cryptiface_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *offp)
@@ -40,13 +61,31 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 static long cryptiface_ioctl(struct file *filp, unsigned int cmd,
 			     unsigned long arg)
 {
-	return -EIO;
-}
+	int err = 0;
+	enum cryptiface_ioctl_opnrs op;
 
-
-static int cryptiface_release(struct inode *inode, struct file *file)
-{
-	return 0;
+	if (_IOC_TYPE(cmd) != CRYPTIFACE_IOCTL_MAGIC) {
+		return -ENOTTY;
+	}
+	if (_IOC_NR(cmd) >= CRYPTIFACE_INVALID_NR) {
+		return -ENOTTY;
+	}
+	if (_IOC_DIR(cmd) & _IOC_READ) {
+		err = !access_ok(VERIFY_WRITE, (void __user *)arg,
+				 _IOC_SIZE(cmd));
+	} else if (_IOC_DIR(cmd) & _IOC_WRITE) {
+		err = !access_ok(VERIFY_READ, (void __user *)arg,
+				 _IOC_SIZE(cmd));
+	}
+	if (err) {
+		return -EFAULT;
+	}
+	op = _IOC_NR(cmd);
+	switch(op) {
+	default: // shouldn't happen
+		err = -ENOTTY;
+	}
+	return err;
 }
 
 static struct file_operations cryptodev_fops = {
