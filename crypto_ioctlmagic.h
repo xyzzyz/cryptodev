@@ -1,21 +1,21 @@
-struct cryptiface_setcurrent_op {
+struct __cryptiface_setcurrent_op {
   int algorithm;
   int context_id;
   int encrypt;
 };
 
-struct cryptiface_addkey_op {
+struct __cryptiface_addkey_op {
   int algorithm;
-  char *key;
+  const char *key;
   size_t key_size;
 };
 
-struct cryptiface_delkey_op {
+struct __cryptiface_delkey_op {
   int algorithm;
   int context_id;
 };
 
-enum cryptiface_ioctl_opnrs {
+enum __cryptiface_ioctl_opnrs {
   CRYPTIFACE_SETCURRENT_NR,
   CRYPTIFACE_ADDKEY_NR,
   CRYPTIFACE_DELKEY_NR,
@@ -24,15 +24,17 @@ enum cryptiface_ioctl_opnrs {
   CRYPTIFACE_INVALID_NR
 };
 
+enum crypt_algorithms { CRYPTIFACE_ALG_DES, CRYPTIFACE_ALG_INVALID };
+
 #define CRYPTIFACE_IOCTL_MAGIC 0xCC
 #define CRYPTIFACE_IOCTL_SETCURRENT _IOW(CRYPTIFACE_IOCTL_MAGIC,        \
                                          CRYPTIFACE_SETCURRENT_NR,      \
-                                         struct cryptiface_setcurrent_op)
+                                         struct __cryptiface_setcurrent_op*)
 #define CRYPTIFACE_IOCTL_ADDKEY _IOW(CRYPTIFACE_IOCTL_MAGIC,            \
                                      CRYPTIFACE_ADDKEY_NR,              \
-                                     struct cryptiface_addkey_op)
-#define CRYPTIFACE_IOCTL_DELKEY _IOW(CRYPTIFACE_IOCTL_MAGIC, 2,         \
+                                     struct __cryptiface_addkey_op*)
+#define CRYPTIFACE_IOCTL_DELKEY _IOW(CRYPTIFACE_IOCTL_MAGIC,            \
                                      CRYPTIFACE_DELKEY_NR,              \
-                                     struct cryptiface_delkey_op)
+                                     struct __cryptiface_delkey_op*)
 #define CRYPTIFACE_IOCTL_NUMRESULTS
 #define CRYPTIFACE_IOCTL_SIZERESULTS

@@ -5,9 +5,11 @@
 #include <linux/fs.h>
 #include <linux/ioctl.h>
 #include <linux/slab.h>
+#include <linux/sched.h>
 #include <asm/uaccess.h>
 
 #include "crypto_structures.h"
+#include "crypto_algorithm.h"
 #include "crypto_ioctlmagic.h"
 #include "crypto_device.h"
 
@@ -23,9 +25,103 @@ static struct class *crypto_class;
 
 struct cryptiface_status {
 	bool ready;
+	int algorithm;
 	int context_id;
 	bool encrypt;
 };
+
+static int cryptiface_ioctl_setcurrent(struct cryptiface_status *status,
+				       int algorithm, int context_id,
+				       int encrypt)
+{
+	if(algorithm < 0 || algorithm >= CRYPTIFACE_ALG_INVALID) {
+		printk(KERN_DEBUG "setcurrent with invalid algorithm: %d\n",
+		       algorithm);
+		return -EINVAL;
+	}
+	if(context_id < 0 || context_id >= CRYPTO_MAX_CONTEXT_COUNT) {
+		printk(KERN_DEBUG "setcurrent with invalid context id: %d\n",
+		       context_id);
+		return -EINVAL;
+	}
+	status->algorithm = algorithm;
+	status->context_id = context_id;
+	status->encrypt = encrypt;
+	status->ready = true;
+	return 0;
+}
+
+static int cryptiface_ioctl_addkey(int algorithm, char *key, size_t size)
+{
+	struct crypto_db *db;
+	int result = 0, ix;
+
+	if(algorithm < 0 || algorithm >= CRYPTIFACE_ALG_INVALID) {
+		printk(KERN_DEBUG "addkey with invalid algorithm: %d\n",
+		       algorithm);
+		result = -EINVAL;
+		goto out;
+	}
+	if(!is_valid_key(key, size)) {
+		printk(KERN_WARNING "invalid key\n");
+		result = -EINVAL;
+		goto out;
+	}
+
+	// TODO: lock
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
+				     current_euid());
+	if(NULL == db) {
+		result = -ENOMEM;
+		goto out;
+	}
+
+	ix = acquire_free_context_index(db);
+	if(-1 == ix) {
+		result = -ENOMEM;
+		goto out;
+	} else {
+		result = add_key_to_db(db, ix, key, size);
+		if(result >= 0) {
+			result = ix;
+		}
+		release_context_index(db, ix);
+	}
+
+out:
+	return result;
+}
+
+static int cryptiface_ioctl_delkey(int algorithm, int id)
+{
+	int result = 0;
+	struct crypto_db *db;
+	if(algorithm < 0 || algorithm >= CRYPTIFACE_ALG_INVALID) {
+		printk(KERN_DEBUG "delkey with invalid algorithm: %d\n",
+		       algorithm);
+		result = -EINVAL;
+		goto out;
+	}
+	if(id < 0 || id >= CRYPTO_MAX_CONTEXT_COUNT) {
+		printk(KERN_DEBUG "invalid context id");
+	}
+
+	// TODO: lock
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
+				     current_euid());
+	if(NULL == db) {
+		result = -ENOMEM;
+		goto out;
+	}
+
+	acquire_context_index(db, id);
+	result = delete_key_from_db(db, id);
+	release_context_index(db, id);
+
+out:
+	return result;
+}
+
 
 static int cryptiface_open(struct inode *inode, struct file *file)
 {
@@ -55,14 +151,15 @@ static ssize_t cryptiface_read(struct file *file, char __user *buf,
 static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 			       size_t count, loff_t *offp)
 {
+	// TODO: take context lock
 	return -EIO;
 }
 
-static long cryptiface_ioctl(struct file *filp, unsigned int cmd,
+static long cryptiface_ioctl(struct file *file, unsigned int cmd,
 			     unsigned long arg)
 {
 	int err = 0;
-	enum cryptiface_ioctl_opnrs op;
+	enum __cryptiface_ioctl_opnrs op;
 
 	if (_IOC_TYPE(cmd) != CRYPTIFACE_IOCTL_MAGIC) {
 		return -ENOTTY;
@@ -82,10 +179,51 @@ static long cryptiface_ioctl(struct file *filp, unsigned int cmd,
 	}
 	op = _IOC_NR(cmd);
 	switch(op) {
+	case CRYPTIFACE_SETCURRENT_NR: {
+		struct __cryptiface_setcurrent_op op_info;
+		if(copy_from_user(&op_info, (void __user *)arg,
+				  sizeof(op_info))) {
+			return -EFAULT;
+		}
+		return cryptiface_ioctl_setcurrent(file->private_data,
+						   op_info.algorithm,
+						   op_info.context_id,
+						   op_info.encrypt);
+	}
+	case CRYPTIFACE_ADDKEY_NR: {
+		struct __cryptiface_addkey_op op_info;
+		char key[CRYPTO_MAX_KEY_LENGTH+1] = {0};
+		if(copy_from_user(&op_info, (void __user *)arg,
+				  sizeof(op_info))) {
+			return -EFAULT;
+		}
+		if(op_info.key_size > CRYPTO_MAX_KEY_LENGTH) {
+			printk(KERN_DEBUG "insane key size");
+			return -ENOMEM;
+		}
+		if(copy_from_user(key, op_info.key, op_info.key_size)) {
+			return -EFAULT;
+		}
+
+		return cryptiface_ioctl_addkey(op_info.algorithm,
+					       key,
+					       op_info.key_size);
+
+	}
+	case CRYPTIFACE_DELKEY_NR: {
+		struct __cryptiface_delkey_op op_info;
+		if(copy_from_user(&op_info, (void __user *)arg,
+				  sizeof(op_info))) {
+			return -EFAULT;
+		}
+		return cryptiface_ioctl_delkey(op_info.algorithm,
+					       op_info.context_id);
+
+	}
 	default: // shouldn't happen
 		err = -ENOTTY;
 	}
-	return err;
+	return -EIO; // shouldn't happen
 }
 
 static struct file_operations cryptodev_fops = {

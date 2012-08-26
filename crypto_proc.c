@@ -172,10 +172,15 @@ static int proc_des_write(struct file *file, const char __user *buffer,
 				return -EINVAL;
 			}
 			ix = acquire_free_context_index(db);
-			err = add_key_to_db(db, ix, tmp_buffer+1, count-1);
-			release_context_index(db, ix);
-			if(err) {
-				return err;
+			if(-1 == ix) {
+				return -ENOMEM;
+			} else {
+				err = add_key_to_db(db, ix, tmp_buffer+1,
+						    count-1);
+				release_context_index(db, ix);
+				if(err) {
+					return err;
+				}
 			}
 			break;
 		case 'D':

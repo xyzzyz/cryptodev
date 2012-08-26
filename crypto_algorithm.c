@@ -125,8 +125,8 @@ int acquire_free_context_index(struct crypto_db* db) {
 	int i, ix = -1;
 	// TODO: take db lock here
 	for(i = 0; i<CRYPTO_MAX_CONTEXT_COUNT; i++) {
+		// TODO: try to take context lock here
 		if(!db->contexts[i].is_active) {
-			// TODO: try to take context lock here
 			ix = i;
 			break;
 		}

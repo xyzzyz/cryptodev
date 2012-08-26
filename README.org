@@ -1,3 +1,10 @@
 * Urządzenie crypto
 ** Autor:
    Adam Michalik <adamm@mimuw.edu.pl>
+** Użycie:
+*** Kompilacja:
+    $ make
+*** Instalacja:
+    # cp crypto.rules /etc/udev/rules.d/90-crypto.rules
+*** Ładowanie:
+    # insmod crypto.ko
