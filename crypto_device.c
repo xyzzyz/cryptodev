@@ -18,7 +18,37 @@ static const unsigned int cryptodev_minor = 0;
 
 static struct class *crypto_class;
 
-static struct file_operations cryptodev_fops;
+
+static int cryptiface_open(struct inode *inode, struct file *file)
+{
+	return -EIO;
+}
+
+static ssize_t cryptiface_read(struct file *file, char __user *buf,
+			       size_t count, loff_t *offp)
+{
+	return -EIO;
+}
+
+static ssize_t cryptiface_write(struct file *file, const char __user *buf,
+			       size_t count, loff_t *offp)
+{
+	return -EIO;
+}
+
+
+static int cryptiface_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static struct file_operations cryptodev_fops = {
+	.owner = THIS_MODULE,
+	.open = cryptiface_open,
+	.read = cryptiface_read,
+	.write = cryptiface_write,
+	.release = cryptiface_release
+};
 
 int create_cryptoiface(void)
 {

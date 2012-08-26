@@ -7,7 +7,6 @@
 #include "crypto_algorithm.h"
 #include "crypto_proc.h"
 #include "crypto_device.h"
-#include "crypto_module.h"
 
 MODULE_AUTHOR("Adam Michalik <adamm@mimuw.edu.pl>");
 MODULE_LICENSE("Dual BSD/GPL");
