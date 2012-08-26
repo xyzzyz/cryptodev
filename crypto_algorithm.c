@@ -1,12 +1,11 @@
 /* -*- mode: C; fill-column: 80; c-file-style: "linux"; indent-tabs-mode: t  -*- */
-#include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/ctype.h>
-#include <linux/time.h>
-#include <linux/wait.h>
 #include <linux/sched.h>
+#include <linux/cdev.h>
 
+#include "crypto_structures.h"
 #include "crypto_algorithm.h"
 
 static void initialize_crypto_db(struct crypto_db *db, uid_t uid)
@@ -113,6 +112,11 @@ int add_key_to_db(struct crypto_db *db, int ix,
 }
 
 int delete_key_from_db(struct crypto_db* db, int ix) {
+	if(!db->contexts[ix].is_active) {
+		// context is inactive
+		return -EINVAL;
+	}
+
 	db->contexts[ix].is_active = false;
 	return 0;
 }

@@ -1,40 +1,6 @@
 /* -*- mode: C; fill-column: 80; c-file-style: "linux"; indent-tabs-mode: t  -*- */
-#ifndef CRYPTO_ALGORITHM_H
-#define CRYPTO_ALGORITHM_H
 
-#include <linux/cred.h>
-#include <linux/wait.h>
-
-#include <stddef.h>
-
-enum { CRYPTO_MAX_CONTEXT_COUNT = 128 };
-enum { CRYPTO_MAX_KEY_LENGTH = 128 };
-
-
-struct crypto_context {
-	bool is_active;
-	char key[CRYPTO_MAX_KEY_LENGTH];
-	int key_len;
-	unsigned long added_time;
-	unsigned long encoded_count;
-	unsigned long decoded_count;
-};
-
-struct new_context_info {
-	int ix;
-	struct list_head contexts;
-};
-
-struct crypto_db {
-	uid_t uid;
-	struct crypto_context contexts[CRYPTO_MAX_CONTEXT_COUNT];
-	struct list_head db_list;
-
-	struct mutex new_context_wait_mutex;
-	wait_queue_head_t new_context_created_waitqueue;
-	spinlock_t new_contexts_list_lock;
-	struct list_head new_contexts_queue;
-};
+// #include "crypto_structures.h"
 
 struct crypto_db* create_crypto_db(uid_t uid);
 struct crypto_db* get_or_create_crypto_db(struct list_head *dbs, uid_t uid);
@@ -48,5 +14,3 @@ int delete_key_from_db(struct crypto_db *db, int ix);
 int acquire_free_context_index(struct crypto_db *db);
 void acquire_context_index(struct crypto_db *db, int ix);
 void release_context_index(struct crypto_db *db, int ix);
-
-#endif
