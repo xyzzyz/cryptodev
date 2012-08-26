@@ -8,9 +8,8 @@
 
 #include "crypto_structures.h"
 #include "crypto_algorithm.h"
+#include "crypto_device.h"
 #include "crypto_proc.h"
-
-extern struct cryptodev_t cryptodev;
 
 static void* proc_overview_seq_start(struct seq_file *s, loff_t *pos)
 {
@@ -23,7 +22,7 @@ static void* proc_overview_seq_start(struct seq_file *s, loff_t *pos)
 
 	uid  = current_euid();
 	// TODO: lock
-	db = get_or_create_crypto_db(&cryptodev.crypto_dbs, uid);
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs, uid);
 	if(NULL == db) {
 		return NULL;
 	}
@@ -42,7 +41,7 @@ static void* proc_overview_seq_next(struct seq_file *s, void *v, loff_t *pos)
 
 	uid = current_euid();
 	// TODO: lock
-	db = get_or_create_crypto_db(&cryptodev.crypto_dbs,
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
 						       uid);
 	if(NULL == db) {
 		return NULL;
@@ -54,8 +53,8 @@ static void proc_overview_seq_stop(struct seq_file *s, void *v) {}
 
 static int proc_overview_seq_show(struct seq_file *s, void *v) {
 	uid_t uid = current_euid();
-	struct crypto_db *db = get_or_create_crypto_db(&cryptodev.crypto_dbs,
-						       uid);
+	struct crypto_db *db = get_or_create_crypto_db(
+		&get_cryptodev()->crypto_dbs, uid);
 	struct crypto_context *context = v;
 	size_t ix = context - db->contexts;
 	if(context->is_active) {
@@ -107,7 +106,7 @@ static int proc_des_read(char *buffer, char **start, off_t offset, int count,
 	}
 
 	// TODO: lock
-	db = get_or_create_crypto_db(&cryptodev.crypto_dbs, uid);
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs, uid);
 	if(NULL == db) {
 		result = -ENOMEM;
 		goto out;
@@ -160,7 +159,7 @@ static int proc_des_write(struct file *file, const char __user *buffer,
 		}
 
 		db = get_or_create_crypto_db(
-			&cryptodev.crypto_dbs, current_euid());
+			&get_cryptodev()->crypto_dbs, current_euid());
 		if(NULL == db) {
 			printk(KERN_WARNING "get_or_create_crypto_db failed\n");
 			return -ENOMEM;
