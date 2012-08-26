@@ -2,5 +2,5 @@
 
 struct cryptodev_t* get_cryptodev(void);
 
-int create_cryptoiface(void);
-void destroy_cryptoiface(void);
+int create_cryptiface(void);
+void destroy_cryptiface(void);

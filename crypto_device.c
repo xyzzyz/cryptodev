@@ -3,6 +3,7 @@
 #include <linux/device.h>
 #include <linux/cdev.h>
 #include <linux/fs.h>
+#include <linux/ioctl.h>
 #include <linux/slab.h>
 
 #include "crypto_structures.h"
@@ -36,6 +37,12 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	return -EIO;
 }
 
+static long cryptiface_ioctl(struct file *filp, unsigned int cmd,
+			     unsigned long arg)
+{
+	return -EIO;
+}
+
 
 static int cryptiface_release(struct inode *inode, struct file *file)
 {
@@ -47,10 +54,11 @@ static struct file_operations cryptodev_fops = {
 	.open = cryptiface_open,
 	.read = cryptiface_read,
 	.write = cryptiface_write,
+	.unlocked_ioctl = cryptiface_ioctl,
 	.release = cryptiface_release
 };
 
-int create_cryptoiface(void)
+int create_cryptiface(void)
 {
 	int err;
 
@@ -97,7 +105,7 @@ create_class_fail:
 	return err;
 }
 
-void destroy_cryptoiface(void)
+void destroy_cryptiface(void)
 {
 	// TODO: take cryptodev lock here
 	while(!list_empty(&cryptodev.crypto_dbs)) {

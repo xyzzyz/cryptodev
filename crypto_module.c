@@ -28,9 +28,9 @@ static int crypto_init(void)
 		return -1; // TODO: errno
 	}
 
-	if((err = create_cryptoiface())) {
-		printk(KERN_WARNING "Couldn't create cryptoiface device.\n");
-		goto create_cryptoiface_fail;
+	if((err = create_cryptiface())) {
+		printk(KERN_WARNING "Couldn't create cryptiface device.\n");
+		goto create_cryptiface_fail;
 	}
 
 	if((err = create_crypto_proc_entries())) {
@@ -41,15 +41,15 @@ static int crypto_init(void)
 	return 0;
 
 create_proc_entries_fail:
-	destroy_cryptoiface();
-create_cryptoiface_fail:
+	destroy_cryptiface();
+create_cryptiface_fail:
 	return err;
 }
 
 static void crypto_exit(void)
 {
 	remove_crypto_proc_entries();
-	destroy_cryptoiface();
+	destroy_cryptiface();
 	printk(KERN_NOTICE "Goodbye, crypto!\n");
 }
 
