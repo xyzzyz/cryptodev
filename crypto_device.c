@@ -27,7 +27,8 @@ static struct class *crypto_class;
 
 struct cryptiface_result {
 	struct scatterlist *sg;
-	size_t length;
+	size_t sg_len;
+	size_t data_len;
 
 	struct list_head result_list;
 };
@@ -43,6 +44,7 @@ struct cryptiface_status {
 	spinlock_t results_queue_lock;
 
 	struct list_head results_queue;
+	bool has_data_ready;
 };
 
 static const char* get_alg_name(enum crypto_algorithms alg)
@@ -223,6 +225,7 @@ static int cryptiface_open(struct inode *inode, struct file *file)
 	}
 	status->tfm = NULL;
 	status->db = db;
+	status->has_data_ready = false;
 	mutex_init(&status->write_mutex);
 	init_waitqueue_head(&status->new_result_waitqueue);
 	spin_lock_init(&status->results_queue_lock);
@@ -248,7 +251,61 @@ static int cryptiface_release(struct inode *inode, struct file *file)
 static ssize_t cryptiface_read(struct file *file, char __user *buf,
 			       size_t count, loff_t *offp)
 {
-	return -EIO;
+	struct cryptiface_status *status = file->private_data;
+	struct cryptiface_result *result_data;
+	int i; int err;
+	size_t buf_avail = count;
+
+	spin_lock(&status->results_queue_lock);
+	while(!status->has_data_ready) {
+		spin_unlock(&status->results_queue_lock);
+		if(wait_event_interruptible(status->new_result_waitqueue,
+					    status->has_data_ready)) {
+			return -ERESTARTSYS;
+		}
+		spin_lock(&status->results_queue_lock);
+	}
+	result_data = list_first_entry(&status->results_queue,
+				       struct cryptiface_result,
+				       result_list);
+	list_del(&result_data->result_list);
+	if(list_empty(&status->results_queue)) {
+		status->has_data_ready = false;
+		spin_unlock(&status->results_queue_lock);
+	} else {
+		spin_unlock(&status->results_queue_lock);
+		wake_up(&status->new_result_waitqueue);
+	}
+	for(i = 0; i<result_data->sg_len
+		    && result_data->data_len > 0
+		    && buf_avail > 0; i++) {
+		void* virt = sg_virt(&result_data->sg[i]);
+		size_t to_copy = min(min((size_t) PAGE_SIZE,
+					 result_data->data_len),
+				     buf_avail);
+		printk(KERN_DEBUG "sg_len: %d, data_len: %d, buf_avail: %d\n",
+		       result_data->sg_len,
+		       result_data->data_len,
+		       buf_avail);
+		if(copy_to_user(buf, virt, to_copy)) {
+			err = -EFAULT;
+			goto free_pages;
+		}
+		buf += to_copy;
+		result_data->data_len -= to_copy;
+		buf_avail -= to_copy;
+	}
+
+	err = count-buf_avail;
+free_pages:
+	for(i = 0; i<result_data->sg_len && result_data->data_len > 0; i++) {
+		unsigned long virt =
+			(unsigned long) sg_virt(&result_data->sg[i]);
+		free_page(virt);
+	}
+	kfree(result_data->sg);
+	kfree(result_data);
+	return err;
 }
 
 static ssize_t cryptiface_write(struct file *file, const char __user *buf,
@@ -321,6 +378,8 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	desc.flags = 0;
 	// TODO: %8 is DES only
 	remaining_data = count + ((count%8 !=0) ? 8 - count%8 : 0);
+	printk(KERN_DEBUG "count: %d, remaining_data: %d\n", count,
+	       remaining_data);
 	if(status->encrypt) {
 		err = crypto_blkcipher_encrypt(&desc, sg, sg,
 					       remaining_data);
@@ -334,10 +393,12 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	}
 
 	result_data->sg = sg;
-	result_data->length = remaining_data;
+	result_data->sg_len = page_count;
+	result_data->data_len = remaining_data;
 
 	spin_lock(&status->results_queue_lock);
 	list_add_tail(&result_data->result_list, &status->results_queue);
+	status->has_data_ready = true;
 	spin_unlock(&status->results_queue_lock);
 	wake_up_interruptible(&status->new_result_waitqueue);
 
