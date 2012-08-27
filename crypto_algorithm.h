@@ -12,5 +12,5 @@ int add_key_to_db(struct crypto_db *db, int ix,
 int delete_key_from_db(struct crypto_db *db, int ix);
 
 int acquire_free_context_index(struct crypto_db *db);
-void acquire_context_index(struct crypto_db *db, int ix);
+int acquire_context_index(struct crypto_db *db, int ix);
 void release_context_index(struct crypto_db *db, int ix);

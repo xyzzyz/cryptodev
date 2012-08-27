@@ -10,6 +10,7 @@
 
 static void initialize_crypto_db(struct crypto_db *db, uid_t uid)
 {
+	int i;
 	INIT_LIST_HEAD(&db->new_contexts_queue);
 	init_waitqueue_head(&db->new_context_created_waitqueue);
 	spin_lock_init(&db->new_contexts_list_lock);
@@ -17,6 +18,9 @@ static void initialize_crypto_db(struct crypto_db *db, uid_t uid)
 	db->uid = uid;
 	memset(db->contexts, 0,
 	       CRYPTO_MAX_CONTEXT_COUNT*sizeof(struct crypto_context));
+	for(i = 0; i<CRYPTO_MAX_CONTEXT_COUNT; i++) {
+		mutex_init(&db->contexts[i].context_mutex);
+	}
 }
 
 struct crypto_db* create_crypto_db(uid_t uid)
@@ -64,8 +68,7 @@ int get_key_index(char *buf) {
 bool is_valid_key(char *buf, int len)
 {
 	int i;
-	if(len % 2 == 1) {
-		// Key has odd number of characters.
+	if(len != 2*CRYPTO_MAX_KEY_LENGTH) {
 		return false;
 	}
 	for(i = 0; i<len; i++) {
@@ -90,7 +93,7 @@ int add_key_to_db(struct crypto_db *db, int ix,
 {
 	struct new_context_info *info;
 
-	printk(KERN_INFO "adding key to db, ix %d, len %d", ix, len);
+	printk(KERN_INFO "adding key to db, ix %d, len %d", ix, len/2);
 	memset(db->contexts[ix].key, 0, len/2);
 	hex_string_to_bytes(buf, len, db->contexts[ix].key);
 	db->contexts[ix].key_len = len/2;
@@ -122,23 +125,24 @@ int delete_key_from_db(struct crypto_db* db, int ix) {
 }
 
 int acquire_free_context_index(struct crypto_db* db) {
-	int i, ix = -1;
-	// TODO: take db lock here
+	int i, ix = -ENOSPC;
 	for(i = 0; i<CRYPTO_MAX_CONTEXT_COUNT; i++) {
-		// TODO: try to take context lock here
+		if(mutex_lock_interruptible(&db->contexts[i].context_mutex)) {
+			return -ERESTARTSYS;
+		}
 		if(!db->contexts[i].is_active) {
 			ix = i;
 			break;
 		}
+		mutex_unlock(&db->contexts[i].context_mutex);
 	}
-	// TODO: release db lock here
 	return ix;
 }
 
-void acquire_context_index(struct crypto_db* db, int ix) {
-	// TODO: implement
+int acquire_context_index(struct crypto_db* db, int ix) {
+	return mutex_lock_interruptible(&db->contexts[ix].context_mutex);
 }
 
 void release_context_index(struct crypto_db* db, int ix) {
-	// TODO: release key lock here
+	mutex_unlock(&db->contexts[ix].context_mutex);
 }

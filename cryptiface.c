@@ -38,7 +38,7 @@ cryptiface_delkey(int fd, int algorithm, int id)
 int
 cryptiface_numresults(int fd)
 {
-  return -EIO;
+  return ioctl(fd, CRYPTIFACE_IOCTL_NUMRESULTS);
 }
 
 int

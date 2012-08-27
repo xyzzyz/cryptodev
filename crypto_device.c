@@ -6,6 +6,8 @@
 #include <linux/ioctl.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/crypto.h>
+#include <linux/scatterlist.h>
 #include <asm/uaccess.h>
 
 #include "crypto_structures.h"
@@ -23,17 +25,43 @@ static const unsigned int cryptodev_minor = 0;
 
 static struct class *crypto_class;
 
-struct cryptiface_status {
-	bool ready;
-	int algorithm;
-	int context_id;
-	bool encrypt;
+struct cryptiface_result {
+	struct scatterlist *sg;
+	size_t length;
+
+	struct list_head result_list;
 };
+
+struct cryptiface_status {
+	struct crypto_db *db;
+	struct crypto_blkcipher *tfm;
+	bool encrypt;
+
+	struct mutex write_mutex;
+
+	wait_queue_head_t new_result_waitqueue;
+	spinlock_t results_queue_lock;
+
+	struct list_head results_queue;
+};
+
+static const char* get_alg_name(enum crypto_algorithms alg)
+{
+	switch(alg) {
+	case CRYPTIFACE_ALG_DES:
+		return "ecb(des)";
+	default:
+		return NULL;
+	}
+}
 
 static int cryptiface_ioctl_setcurrent(struct cryptiface_status *status,
 				       int algorithm, int context_id,
 				       int encrypt)
 {
+	struct crypto_context *context;
+	struct crypto_blkcipher *tfm;
+	int err;
 	if(algorithm < 0 || algorithm >= CRYPTIFACE_ALG_INVALID) {
 		printk(KERN_DEBUG "setcurrent with invalid algorithm: %d\n",
 		       algorithm);
@@ -44,11 +72,44 @@ static int cryptiface_ioctl_setcurrent(struct cryptiface_status *status,
 		       context_id);
 		return -EINVAL;
 	}
-	status->algorithm = algorithm;
-	status->context_id = context_id;
+
+	tfm = crypto_alloc_blkcipher(get_alg_name(algorithm), 0, 0);
+	if(IS_ERR(tfm)) {
+		printk(KERN_DEBUG "alloc_blkcipher %s failed\n",
+		       get_alg_name(algorithm));
+		return PTR_ERR(tfm);
+	}
+
+	context = &status->db->contexts[context_id];
+	if(mutex_lock_interruptible(&context->context_mutex)) {
+		err = -ERESTARTSYS;
+		goto fail;
+	}
+	if(!context->is_active) {
+		printk(KERN_DEBUG "trying to setcurrent invalid context: %d\n",
+		       context_id);
+		err = -EINVAL;
+		goto unlock;
+	}
+	err = crypto_blkcipher_setkey(tfm, context->key, context->key_len);
+	mutex_unlock(&context->context_mutex);
+	if (err) {
+		printk(KERN_DEBUG "setkey() failed flags=%x\n",
+		       crypto_blkcipher_get_flags(tfm));
+		goto fail;
+	}
+
+	if(status->tfm != NULL) {
+		crypto_free_blkcipher(status->tfm);
+	}
+	status->tfm = tfm;
 	status->encrypt = encrypt;
-	status->ready = true;
 	return 0;
+unlock:
+	mutex_unlock(&context->context_mutex);
+fail:
+	crypto_free_blkcipher(tfm);
+	return err;
 }
 
 static int cryptiface_ioctl_addkey(int algorithm, char *key, size_t size)
@@ -68,17 +129,20 @@ static int cryptiface_ioctl_addkey(int algorithm, char *key, size_t size)
 		goto out;
 	}
 
-	// TODO: lock
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		return -ERESTARTSYS;
+	}
 	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
 				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
 	if(NULL == db) {
 		result = -ENOMEM;
 		goto out;
 	}
 
 	ix = acquire_free_context_index(db);
-	if(-1 == ix) {
-		result = -ENOMEM;
+	if(ix < 0) {
+		result = ix;
 		goto out;
 	} else {
 		result = add_key_to_db(db, ix, key, size);
@@ -106,15 +170,20 @@ static int cryptiface_ioctl_delkey(int algorithm, int id)
 		printk(KERN_DEBUG "invalid context id");
 	}
 
-	// TODO: lock
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		return -ERESTARTSYS;
+	}
 	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
 				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
 	if(NULL == db) {
 		result = -ENOMEM;
 		goto out;
 	}
 
-	acquire_context_index(db, id);
+	if(acquire_context_index(db, id)) {
+		return -ERESTARTSYS;
+	}
 	result = delete_key_from_db(db, id);
 	release_context_index(db, id);
 
@@ -122,22 +191,56 @@ out:
 	return result;
 }
 
+static int cryptiface_ioctl_numresults(struct cryptiface_status *status) {
+	struct list_head *head;
+	int count = 0;
+	spin_lock(&status->results_queue_lock);
+	list_for_each(head, &status->results_queue) {
+		count++;
+	}
+	spin_unlock(&status->results_queue_lock);
+	return count;
+}
 
 static int cryptiface_open(struct inode *inode, struct file *file)
 {
+	struct crypto_db *db;
 	struct cryptiface_status *status = kmalloc(sizeof(*status), GFP_KERNEL);
+	int err;
 	if(NULL == status) {
 		return -ENOMEM;
 	}
-
-	status->ready = false;
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		err = -ERESTARTSYS;
+		goto fail;
+	}
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
+				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
+	if(NULL == db) {
+		err = -ENOMEM;
+		goto fail;
+	}
+	status->tfm = NULL;
+	status->db = db;
+	mutex_init(&status->write_mutex);
+	init_waitqueue_head(&status->new_result_waitqueue);
+	spin_lock_init(&status->results_queue_lock);
+	INIT_LIST_HEAD(&status->results_queue);
 	file->private_data = status;
 	return 0;
+fail:
+	kfree(status);
+	return err;
 }
 
 static int cryptiface_release(struct inode *inode, struct file *file)
 {
-	kfree(file->private_data);
+	struct cryptiface_status *status = file->private_data;
+	if(NULL != status->tfm) {
+		crypto_free_blkcipher(status->tfm);
+	}
+	kfree(status);
 	return 0;
 }
 
@@ -151,8 +254,109 @@ static ssize_t cryptiface_read(struct file *file, char __user *buf,
 static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 			       size_t count, loff_t *offp)
 {
-	// TODO: take context lock
-	return -EIO;
+	struct cryptiface_status *status = file->private_data;
+	struct cryptiface_result *result_data;
+	int page_count = count/PAGE_SIZE;
+	size_t remaining_data = count;
+	int i; int err;
+	char *page; char **pages;
+	struct scatterlist *sg;
+	struct blkcipher_desc desc;
+	if(NULL == status->tfm) {
+		printk(KERN_DEBUG "writing to cryptiface without setting key\n");
+		return -EINVAL;
+	}
+
+	// To avoid potential corruption of encryption context,
+	// only one process can be writing to a given fd at a time
+	if(mutex_lock_interruptible(&status->write_mutex)) {
+		return -ERESTARTSYS;
+	}
+
+	if(count % PAGE_SIZE != 0) {
+		page_count++;
+	}
+
+	result_data = kmalloc(sizeof(*result_data), GFP_KERNEL);
+	if(NULL == result_data) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	pages = kmalloc(page_count*sizeof(*pages), GFP_KERNEL);
+	if(NULL == pages) {
+		err = -ENOMEM;
+		goto free_result_data;
+	}
+
+	sg = kmalloc(page_count*sizeof(*sg), GFP_KERNEL);
+	if(NULL == sg) {
+		err = -ENOMEM;
+		goto free_pages_list;
+	}
+	sg_init_table(sg, page_count);
+	for(i = 0; i<page_count; i++) {
+		page = (void*) __get_free_page(GFP_KERNEL);
+		if(NULL == page) {
+			i--;
+			err = -ENOMEM;
+			goto err_free_pages;
+		}
+		pages[i] = page;
+		if(copy_from_user(page, buf, min(remaining_data,
+						 (size_t) PAGE_SIZE))) {
+			err = -EFAULT;
+			goto err_free_pages;
+		}
+		if(remaining_data < PAGE_SIZE) {
+			// zero fill
+			memset(page+remaining_data, 0,
+			       PAGE_SIZE-remaining_data);
+		}
+		sg_set_buf(&sg[i], page, PAGE_SIZE);
+		remaining_data -= min(remaining_data, (size_t) PAGE_SIZE);
+	}
+
+	desc.tfm = status->tfm;
+	desc.flags = 0;
+	// TODO: %8 is DES only
+	remaining_data = count + ((count%8 !=0) ? 8 - count%8 : 0);
+	if(status->encrypt) {
+		err = crypto_blkcipher_encrypt(&desc, sg, sg,
+					       remaining_data);
+	} else {
+		err = crypto_blkcipher_decrypt(&desc, sg, sg,
+					       remaining_data);
+	}
+	if(err) {
+		printk(KERN_DEBUG "encryption/decryption error\n");
+		goto err_free_pages;
+	}
+
+	result_data->sg = sg;
+	result_data->length = remaining_data;
+
+	spin_lock(&status->results_queue_lock);
+	list_add_tail(&result_data->result_list, &status->results_queue);
+	spin_unlock(&status->results_queue_lock);
+	wake_up_interruptible(&status->new_result_waitqueue);
+
+	kfree(pages);
+	err = count;
+	goto out;
+
+err_free_pages:
+	kfree(sg);
+	for(;i >= 0; i--) {
+		free_page((unsigned long) pages[i]);
+	}
+free_pages_list:
+	kfree(pages);
+free_result_data:
+	kfree(result_data);
+out:
+	mutex_unlock(&status->write_mutex);
+	return err;
 }
 
 static long cryptiface_ioctl(struct file *file, unsigned int cmd,
@@ -197,7 +401,7 @@ static long cryptiface_ioctl(struct file *file, unsigned int cmd,
 				  sizeof(op_info))) {
 			return -EFAULT;
 		}
-		if(op_info.key_size > CRYPTO_MAX_KEY_LENGTH) {
+		if(op_info.key_size > 2*CRYPTO_MAX_KEY_LENGTH) {
 			printk(KERN_DEBUG "insane key size");
 			return -ENOMEM;
 		}
@@ -220,6 +424,9 @@ static long cryptiface_ioctl(struct file *file, unsigned int cmd,
 					       op_info.context_id);
 
 	}
+	case CRYPTIFACE_NUMRESULTS_NR: {
+		return cryptiface_ioctl_numresults(file->private_data);
+	}
 	default: // shouldn't happen
 		err = -ENOTTY;
 	}
@@ -240,6 +447,7 @@ int create_cryptiface(void)
 	int err;
 
         INIT_LIST_HEAD(&cryptodev.crypto_dbs);
+	mutex_init(&cryptodev.crypto_dbs_mutex);
 
 	crypto_class = class_create(THIS_MODULE, "crypto");
 	if(IS_ERR(crypto_class)) {
@@ -284,16 +492,16 @@ create_class_fail:
 
 void destroy_cryptiface(void)
 {
-	// TODO: take cryptodev lock here
+	mutex_lock(&get_cryptodev()->crypto_dbs_mutex);
 	while(!list_empty(&cryptodev.crypto_dbs)) {
 		struct crypto_db *db = list_first_entry(
 			&cryptodev.crypto_dbs, struct crypto_db, db_list);
 		list_del(&db->db_list);
-		// TODO: take context lock here
 		kfree(db);
 	}
 	device_destroy(crypto_class, cryptodev.dev);
 	cdev_del(&cryptodev.cdev);
 	unregister_chrdev_region(cryptodev.dev, 1);
 	class_destroy(crypto_class);
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
 }

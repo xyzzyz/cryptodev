@@ -2,6 +2,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/cdev.h>
+#include <linux/crypto.h>
 
 #include "crypto_structures.h"
 #include "crypto_algorithm.h"
@@ -13,8 +14,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 static bool crypto_api_available(void)
 {
-	// TODO: implement.
-	return true;
+	return crypto_has_alg("ecb(des)", 0, 0);
 }
 
 static int crypto_init(void)
@@ -25,7 +25,7 @@ static int crypto_init(void)
 
 	if(!crypto_api_available()) {
 		printk(KERN_WARNING "Crypto API unavailable\n");
-		return -1; // TODO: errno
+		return -ENODEV;
 	}
 
 	if((err = create_cryptiface())) {

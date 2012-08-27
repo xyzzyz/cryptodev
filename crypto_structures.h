@@ -7,11 +7,12 @@ struct cryptodev_t {
 	struct cdev cdev;
 	struct device *device;
 	struct list_head crypto_dbs;
+	struct mutex crypto_dbs_mutex;
 };
 
 
 enum { CRYPTO_MAX_CONTEXT_COUNT = 128 };
-enum { CRYPTO_MAX_KEY_LENGTH = 128 };
+enum { CRYPTO_MAX_KEY_LENGTH = 8 };
 
 
 struct crypto_context {
@@ -21,6 +22,8 @@ struct crypto_context {
 	unsigned long added_time;
 	unsigned long encoded_count;
 	unsigned long decoded_count;
+
+	struct mutex context_mutex;
 };
 
 struct new_context_info {

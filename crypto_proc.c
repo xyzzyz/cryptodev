@@ -13,16 +13,18 @@
 
 static void* proc_overview_seq_start(struct seq_file *s, loff_t *pos)
 {
-	uid_t uid;
 	struct crypto_db *db;
 
 	if(*pos >= CRYPTO_MAX_CONTEXT_COUNT) {
 		return NULL;
 	}
 
-	uid  = current_euid();
-	// TODO: lock
-	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs, uid);
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		return NULL;
+	}
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
+				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
 	if(NULL == db) {
 		return NULL;
 	}
@@ -31,7 +33,6 @@ static void* proc_overview_seq_start(struct seq_file *s, loff_t *pos)
 
 static void* proc_overview_seq_next(struct seq_file *s, void *v, loff_t *pos)
 {
-	uid_t uid;
 	struct crypto_db *db;
 
 	(*pos)++;
@@ -39,10 +40,12 @@ static void* proc_overview_seq_next(struct seq_file *s, void *v, loff_t *pos)
 		return NULL;
 	}
 
-	uid = current_euid();
-	// TODO: lock
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		return NULL;
+	}
 	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
-						       uid);
+				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
 	if(NULL == db) {
 		return NULL;
 	}
@@ -52,11 +55,26 @@ static void* proc_overview_seq_next(struct seq_file *s, void *v, loff_t *pos)
 static void proc_overview_seq_stop(struct seq_file *s, void *v) {}
 
 static int proc_overview_seq_show(struct seq_file *s, void *v) {
-	uid_t uid = current_euid();
-	struct crypto_db *db = get_or_create_crypto_db(
-		&get_cryptodev()->crypto_dbs, uid);
-	struct crypto_context *context = v;
-	size_t ix = context - db->contexts;
+	struct crypto_db *db;
+	struct crypto_context *context;
+	size_t ix;
+
+	if(v == NULL) {
+		return -EINVAL;
+	}
+
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		return -ERESTARTSYS;
+	}
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
+				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
+	if(NULL == db) {
+		return -ENOMEM;
+	}
+
+	context = v;
+	ix = context - db->contexts;
 	if(context->is_active) {
 		seq_printf(s, "%zd\tdes\t%ld\t%ld\t%ld\n",
 			   ix, context->added_time,
@@ -91,7 +109,6 @@ static int proc_des_read(char *buffer, char **start, off_t offset, int count,
 			 int *eof, void *data)
 {
 	int result, written;
-	uid_t uid  = current_euid();
 	struct crypto_db *db;
 	struct new_context_info *info;
 
@@ -105,8 +122,12 @@ static int proc_des_read(char *buffer, char **start, off_t offset, int count,
 		return -EINVAL;
 	}
 
-	// TODO: lock
-	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs, uid);
+	if(mutex_lock_interruptible(&get_cryptodev()->crypto_dbs_mutex)) {
+		return -ERESTARTSYS;
+	}
+	db = get_or_create_crypto_db(&get_cryptodev()->crypto_dbs,
+				     current_euid());
+	mutex_unlock(&get_cryptodev()->crypto_dbs_mutex);
 	if(NULL == db) {
 		result = -ENOMEM;
 		goto out;
@@ -144,15 +165,15 @@ static int proc_des_write(struct file *file, const char __user *buffer,
 		printk(KERN_WARNING "Call to write() with too little bytes");
 		return -EINVAL;
 	}
-	if(count >= CRYPTO_MAX_KEY_LENGTH + 1) {
-		printk(KERN_WARNING "Key too long");
-		return -E2BIG;
-	}
 	{
 		// We add 2 to have null terminator.
-		char tmp_buffer[CRYPTO_MAX_KEY_LENGTH+2] = {0};
+		char tmp_buffer[2*CRYPTO_MAX_KEY_LENGTH+2] = {0};
 		int ix; int err;
 		struct crypto_db *db;
+		if(count > 2*CRYPTO_MAX_KEY_LENGTH + 1) {
+			printk(KERN_WARNING "Key too long");
+			return -E2BIG;
+		}
 
 		if(copy_from_user(tmp_buffer, buffer, count)) {
 			return -EFAULT;
@@ -172,8 +193,8 @@ static int proc_des_write(struct file *file, const char __user *buffer,
 				return -EINVAL;
 			}
 			ix = acquire_free_context_index(db);
-			if(-1 == ix) {
-				return -ENOMEM;
+			if(ix < 0) {
+				return ix;
 			} else {
 				err = add_key_to_db(db, ix, tmp_buffer+1,
 						    count-1);
