@@ -33,7 +33,7 @@ main(int argc, char **argv) {
     perror("open()");
     return -1;
   }
-  int key_id = cryptiface_addkey(fd, CRYPTIFACE_ALG_DES, "DEADBABEDEADBEEF");
+  int key_id = cryptiface_addkey(fd, CRYPTIFACE_ALG_DES, "3132333435363738");
   if(-1 == key_id) {
     perror("cryptiface_addkey()");
     return -1;
@@ -44,7 +44,7 @@ main(int argc, char **argv) {
     return -1;
   }
 
-  const char data[] = "LOL WAT CO JA WIDZAM\n";
+  const char data[] = "AAAAAAAA";
   printf("plaintext:\n");
   hexdump(data, sizeof(data));
 
@@ -54,7 +54,12 @@ main(int argc, char **argv) {
   }
 
   printf("cryptiface_numresults() = %d\n", cryptiface_numresults(fd));
-  char buf[10*sizeof(data)];
+  size_t results[1];
+  if(cryptiface_sizeresults(fd, results, 1) < 0) {
+    perror("cryptiface_sizeresults()");
+  }
+  printf("cryptiface_sizeresults: %zd\n", results[0]);
+  char buf[results[0]];
   ssize_t len = read(fd, buf, sizeof(buf));
   if(len < 0) {
     perror("read()");
@@ -72,6 +77,12 @@ main(int argc, char **argv) {
     perror("write()");
     return -1;
   }
+
+  printf("cryptiface_numresults() = %d\n", cryptiface_numresults(fd));
+  if(cryptiface_sizeresults(fd, results, 1) < 0) {
+    perror("cryptiface_sizeresults()");
+  }
+  printf("cryptiface_sizeresults: %zd\n", results[0]);
 
   char clear_buf[sizeof(buf)];
   len = read(fd, clear_buf, sizeof(clear_buf));

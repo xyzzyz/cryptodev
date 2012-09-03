@@ -44,5 +44,8 @@ cryptiface_numresults(int fd)
 int
 cryptiface_sizeresults(int fd, size_t *res, int n)
 {
-  return -EIO;
+  struct __cryptiface_sizeresults_op op_info;
+  op_info.results = res;
+  op_info.count = n;
+  return ioctl(fd, CRYPTIFACE_IOCTL_SIZERESULTS, &op_info);
 }

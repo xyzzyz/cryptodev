@@ -17,6 +17,11 @@ struct __cryptiface_delkey_op {
 	int context_id;
 };
 
+struct __cryptiface_sizeresults_op {
+	size_t *results;
+	int count;
+};
+
 enum __cryptiface_ioctl_opnrs {
 	CRYPTIFACE_SETCURRENT_NR,
 	CRYPTIFACE_ADDKEY_NR,
@@ -40,4 +45,6 @@ enum crypto_algorithms { CRYPTIFACE_ALG_DES, CRYPTIFACE_ALG_INVALID };
                                      struct __cryptiface_delkey_op*)
 #define CRYPTIFACE_IOCTL_NUMRESULTS _IO(CRYPTIFACE_IOCTL_MAGIC,		\
 					CRYPTIFACE_NUMRESULTS_NR)
-#define CRYPTIFACE_IOCTL_SIZERESULTS
+#define CRYPTIFACE_IOCTL_SIZERESULTS _IOR(CRYPTIFACE_IOCTL_MAGIC,	\
+					  CRYPTIFACE_SIZERESULTS_NR,	\
+					  struct __cryptiface_sizeresults_op*) 

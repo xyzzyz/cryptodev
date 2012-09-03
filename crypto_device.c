@@ -41,7 +41,7 @@ struct cryptiface_status {
 	struct mutex write_mutex;
 
 	wait_queue_head_t new_result_waitqueue;
-	spinlock_t results_queue_lock;
+	struct mutex results_queue_mutex;
 
 	struct list_head results_queue;
 	bool has_data_ready;
@@ -193,15 +193,51 @@ out:
 	return result;
 }
 
-static int cryptiface_ioctl_numresults(struct cryptiface_status *status) {
+static int cryptiface_ioctl_numresults(struct cryptiface_status *status)
+{
 	struct list_head *head;
 	int count = 0;
-	spin_lock(&status->results_queue_lock);
+	if(mutex_lock_interruptible(&status->results_queue_mutex)) {
+		return -ERESTARTSYS;
+	}
 	list_for_each(head, &status->results_queue) {
 		count++;
 	}
-	spin_unlock(&status->results_queue_lock);
+	mutex_unlock(&status->results_queue_mutex);
 	return count;
+}
+
+static int cryptiface_ioctl_sizeresults(struct cryptiface_status *status,
+					size_t __user *results,
+					int count)
+{
+	int err;
+	int i;
+	struct cryptiface_result *result;
+	struct list_head *head;
+	if(mutex_lock_interruptible(&status->results_queue_mutex)) {
+		err = -ERESTARTSYS;
+		goto out;
+	}
+	i = 0;
+	list_for_each(head, &status->results_queue) {
+		if(i >= count) {
+			break;
+		}
+		result = list_entry(head, struct cryptiface_result,
+				    result_list);
+		if(copy_to_user(&results[i], &result->data_len,
+				sizeof(size_t))) {
+			err = -EFAULT;
+			goto mutex_unlock;
+		}
+		i++;
+	}
+	err = i;
+mutex_unlock:
+	mutex_unlock(&status->results_queue_mutex);
+out:
+	return err;
 }
 
 static int cryptiface_open(struct inode *inode, struct file *file)
@@ -228,7 +264,7 @@ static int cryptiface_open(struct inode *inode, struct file *file)
 	status->has_data_ready = false;
 	mutex_init(&status->write_mutex);
 	init_waitqueue_head(&status->new_result_waitqueue);
-	spin_lock_init(&status->results_queue_lock);
+	mutex_init(&status->results_queue_mutex);
 	INIT_LIST_HEAD(&status->results_queue);
 	file->private_data = status;
 	return 0;
@@ -256,14 +292,18 @@ static ssize_t cryptiface_read(struct file *file, char __user *buf,
 	int i; int err;
 	size_t buf_avail = count;
 
-	spin_lock(&status->results_queue_lock);
+	if(mutex_lock_interruptible(&status->results_queue_mutex)) {
+		return -ERESTARTSYS;
+	}
 	while(!status->has_data_ready) {
-		spin_unlock(&status->results_queue_lock);
+		mutex_unlock(&status->results_queue_mutex);
 		if(wait_event_interruptible(status->new_result_waitqueue,
 					    status->has_data_ready)) {
 			return -ERESTARTSYS;
 		}
-		spin_lock(&status->results_queue_lock);
+		if(mutex_lock_interruptible(&status->results_queue_mutex)) {
+			return -ERESTARTSYS;
+		}
 	}
 	result_data = list_first_entry(&status->results_queue,
 				       struct cryptiface_result,
@@ -271,9 +311,9 @@ static ssize_t cryptiface_read(struct file *file, char __user *buf,
 	list_del(&result_data->result_list);
 	if(list_empty(&status->results_queue)) {
 		status->has_data_ready = false;
-		spin_unlock(&status->results_queue_lock);
+		mutex_unlock(&status->results_queue_mutex);
 	} else {
-		spin_unlock(&status->results_queue_lock);
+		mutex_unlock(&status->results_queue_mutex);
 		wake_up(&status->new_result_waitqueue);
 	}
 	for(i = 0; i<result_data->sg_len
@@ -283,10 +323,6 @@ static ssize_t cryptiface_read(struct file *file, char __user *buf,
 		size_t to_copy = min(min((size_t) PAGE_SIZE,
 					 result_data->data_len),
 				     buf_avail);
-		printk(KERN_DEBUG "sg_len: %d, data_len: %d, buf_avail: %d\n",
-		       result_data->sg_len,
-		       result_data->data_len,
-		       buf_avail);
 		if(copy_to_user(buf, virt, to_copy)) {
 			err = -EFAULT;
 			goto free_pages;
@@ -353,6 +389,7 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	}
 	sg_init_table(sg, page_count);
 	for(i = 0; i<page_count; i++) {
+		size_t to_copy = min(remaining_data, (size_t) PAGE_SIZE);
 		page = (void*) __get_free_page(GFP_KERNEL);
 		if(NULL == page) {
 			i--;
@@ -360,11 +397,11 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 			goto err_free_pages;
 		}
 		pages[i] = page;
-		if(copy_from_user(page, buf, min(remaining_data,
-						 (size_t) PAGE_SIZE))) {
+		if(copy_from_user(page, buf, to_copy)) {
 			err = -EFAULT;
 			goto err_free_pages;
 		}
+		buf += to_copy;
 		if(remaining_data < PAGE_SIZE) {
 			// zero fill
 			memset(page+remaining_data, 0,
@@ -378,7 +415,7 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	desc.flags = 0;
 	// TODO: %8 is DES only
 	remaining_data = count + ((count%8 !=0) ? 8 - count%8 : 0);
-	printk(KERN_DEBUG "count: %d, remaining_data: %d\n", count,
+	printk(KERN_DEBUG "count: %zd, remaining_data: %zd\n", count,
 	       remaining_data);
 	if(status->encrypt) {
 		err = crypto_blkcipher_encrypt(&desc, sg, sg,
@@ -389,6 +426,7 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	}
 	if(err) {
 		printk(KERN_DEBUG "encryption/decryption error\n");
+		i = page_count-1;
 		goto err_free_pages;
 	}
 
@@ -396,10 +434,14 @@ static ssize_t cryptiface_write(struct file *file, const char __user *buf,
 	result_data->sg_len = page_count;
 	result_data->data_len = remaining_data;
 
-	spin_lock(&status->results_queue_lock);
+	if(mutex_lock_interruptible(&status->results_queue_mutex)) {
+		err = -ERESTARTSYS;
+		i = page_count-1;
+		goto err_free_pages;
+	}
 	list_add_tail(&result_data->result_list, &status->results_queue);
 	status->has_data_ready = true;
-	spin_unlock(&status->results_queue_lock);
+	mutex_unlock(&status->results_queue_mutex);
 	wake_up_interruptible(&status->new_result_waitqueue);
 
 	kfree(pages);
@@ -487,6 +529,17 @@ static long cryptiface_ioctl(struct file *file, unsigned int cmd,
 	}
 	case CRYPTIFACE_NUMRESULTS_NR: {
 		return cryptiface_ioctl_numresults(file->private_data);
+	}
+	case CRYPTIFACE_SIZERESULTS_NR: {
+		struct __cryptiface_sizeresults_op op_info;
+		if(copy_from_user(&op_info, (void __user *)arg,
+				  sizeof(op_info))) {
+			return -EFAULT;
+		}
+		return cryptiface_ioctl_sizeresults(file->private_data,
+						    op_info.results,
+						    op_info.count);
+
 	}
 	default: // shouldn't happen
 		err = -ENOTTY;
