@@ -499,7 +499,7 @@ static long cryptiface_ioctl(struct file *file, unsigned int cmd,
 	}
 	case CRYPTIFACE_ADDKEY_NR: {
 		struct __cryptiface_addkey_op op_info;
-		char key[CRYPTO_MAX_KEY_LENGTH+1] = {0};
+		char key[2*CRYPTO_MAX_KEY_LENGTH+1] = {0};
 		if(copy_from_user(&op_info, (void __user *)arg,
 				  sizeof(op_info))) {
 			return -EFAULT;

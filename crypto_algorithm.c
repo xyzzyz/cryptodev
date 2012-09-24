@@ -80,11 +80,15 @@ bool is_valid_key(char *buf, int len)
 }
 
 static void hex_string_to_bytes(char *hex, int hex_len,
-                                char *out) {
-  int i;
-  for(i = 0; i<hex_len/2; i++) {
-    sscanf(hex+2*i, "%2hhx", &out[i]);
-  }
+                                char *out)
+{
+	int i;
+	char buf[3] = {0};
+	for(i = 0; i<hex_len/2; i++) {
+		buf[0] = hex[2*i];
+		buf[1] = hex[2*i+1];
+		sscanf(buf, "%2hhx", &out[i]);
+	}
 }
 
 
