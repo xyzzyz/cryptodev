@@ -1,10 +1,15 @@
-* Urządzenie crypto
-** Autor:
-   Adam Michalik <adamm@mimuw.edu.pl>
-** Użycie:
-*** Kompilacja:
-    $ make
-*** Instalacja:
-    # cp crypto.rules /etc/udev/rules.d/90-crypto.rules
-*** Ładowanie:
-    # insmod crypto.ko
+* Crypto device
+** what is it?
+   this is a userland interface for Linux Crypto API
+** what is it good for?
+   dunno, I wrote it to pass a course
+** usage
+   $ make
+
+   will generate kernel module
+** license
+   do with it whatever you want, i'll be happy if you let me know that
+   you find it interesting (i hope you do), or that you use it (wow,
+   what for?)
+** author
+   Adam Michalik <adam@michalik.es>
